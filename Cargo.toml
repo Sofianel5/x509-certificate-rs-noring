@@ -2,7 +2,7 @@
 name = "x509-certificate"
 version = "0.23.1"
 authors = ["Gregory Szorc <gregory.szorc@gmail.com>", "Sofiane Larbi <sofiane@stanford.edu>"]
-edition = "2024"
+edition = "2021"
 rust-version = "1.76"
 license = "MPL-2.0"
 description = "X.509 certificate parser and utility functionality"
