@@ -7,9 +7,14 @@
 use {
     crate::{
         // algorithm::DigestAlgorithm,asn1time::Time, rfc2986,
-        rfc3280::Name, rfc5280, rfc5652,
-        rfc5958::Attributes, rfc8017::RsaPublicKey,
-        KeyAlgorithm, SignatureAlgorithm, X509CertificateError as Error,
+        rfc3280::Name,
+        rfc5280,
+        rfc5652,
+        rfc5958::Attributes,
+        rfc8017::RsaPublicKey,
+        KeyAlgorithm,
+        SignatureAlgorithm,
+        X509CertificateError as Error,
     },
     bcder::{
         decode::Constructed,
@@ -17,7 +22,7 @@ use {
         int::Integer,
         string::{
             // BitString,
-            OctetString
+            OctetString,
         },
         ConstOid, Mode, Oid,
     },
@@ -29,12 +34,18 @@ use {
     spki::EncodePublicKey,
     std::{
         cmp::Ordering,
-        // collections::HashSet,
+        collections::HashSet,
         fmt::{Debug, Formatter},
         hash::{Hash, Hasher},
         io::Write,
         ops::{Deref, DerefMut},
     },
+};
+
+// use p256 lib
+use p256::{
+    ecdsa::{signature::Verifier, Signature, VerifyingKey},
+    PublicKey,
 };
 
 // Key Usage extension.
@@ -539,7 +550,49 @@ impl CapturedX509Certificate {
         &self,
         other: impl AsRef<X509Certificate>,
     ) -> Result<(), Error> {
-        Ok(())
+        let public_key = other
+            .as_ref()
+            .0
+            .tbs_certificate
+            .subject_public_key_info
+            .subject_public_key
+            .octet_bytes();
+
+        self.verify_signed_by_public_key(public_key)
+        // Ok(())
+    }
+
+    pub fn verify_signed_by_public_key(
+        &self,
+        public_key_data: impl AsRef<[u8]>,
+    ) -> Result<(), Error> {
+        // Always verify against the original content, as the inner
+        // certificate could be mutated via the mutable wrapper of this
+        // type.
+        let this_cert = match &self.original {
+            OriginalData::Ber(data) => X509Certificate::from_ber(data),
+            OriginalData::Der(data) => X509Certificate::from_der(data),
+        }
+        .expect("certificate re-parse should never fail");
+
+        let signed_data = this_cert
+            .0
+            .tbs_certificate
+            .raw_data
+            .as_ref()
+            .expect("original certificate data should have persisted as part of re-parse");
+
+        let signature_bytes = this_cert.0.signature.octet_bytes(); // TODO: CHECK IF THIS IS CORRECT
+        let signature = Signature::from_der(&signature_bytes).expect("deserializing error");
+
+        let public_key_uncompressed = hex::decode(public_key_data).expect("decoding error");
+        let public_key =
+            PublicKey::from_sec1_bytes(&public_key_uncompressed).expect("import error");
+        let verifying_key = VerifyingKey::from(&public_key);
+
+        verifying_key
+            .verify(signed_data, &signature)
+            .map_err(|_| Error::CertificateSignatureVerificationFailed)
     }
 
     // Verify that another certificate, `other`, signed this certificate.
@@ -660,12 +713,12 @@ impl CapturedX509Certificate {
     //
     // This function can yield false negatives for cases where we don't
     // support the signature algorithm on the incoming certificates.
-    // pub fn find_signing_certificate<'a>(
-    //     &self,
-    //     mut certs: impl Iterator<Item = &'a Self>,
-    // ) -> Option<&'a Self> {
-    //     certs.find(|candidate| self.verify_signed_by_certificate(candidate).is_ok())
-    // }
+    pub fn find_signing_certificate<'a>(
+        &self,
+        mut certs: impl Iterator<Item = &'a Self>,
+    ) -> Option<&'a Self> {
+        certs.find(|candidate| self.verify_signed_by_certificate(candidate).is_ok())
+    }
 
     // Attempt to resolve the signing chain of this certificate.
     //
@@ -693,33 +746,33 @@ impl CapturedX509Certificate {
         // The logic here is a bit wonky. As we build up the collection of certificates,
         // we want to filter out ourself and remove duplicates. We remove duplicates by
         // storing encountered certificates in a HashSet.
-        // #[allow(clippy::mutable_key_type)]
-        // let mut seen = HashSet::new();
-        // let mut remaining = vec![];
+        #[allow(clippy::mutable_key_type)]
+        let mut seen = HashSet::new();
+        let mut remaining = vec![];
 
-        // for cert in certs {
-        //     if cert == self || seen.contains(cert) {
-        //         continue;
-        //     } else {
-        //         remaining.push(cert);
-        //         seen.insert(cert);
-        //     }
-        // }
+        for cert in certs {
+            if cert == self || seen.contains(cert) {
+                continue;
+            } else {
+                remaining.push(cert);
+                seen.insert(cert);
+            }
+        }
 
-        // drop(seen);
+        drop(seen);
 
-        // let mut chain = vec![];
+        let mut chain = vec![];
 
-        // let mut last_cert = self;
-        // while let Some(issuer) = last_cert.find_signing_certificate(remaining.iter().copied()) {
-        //     chain.push(issuer);
-        //     last_cert = issuer;
+        let mut last_cert = self;
+        while let Some(issuer) = last_cert.find_signing_certificate(remaining.iter().copied()) {
+            chain.push(issuer);
+            last_cert = issuer;
 
-        //     remaining = remaining
-        //         .drain(..)
-        //         .filter(|cert| *cert != issuer)
-        //         .collect::<Vec<_>>();
-        // }
+            remaining = remaining
+                .drain(..)
+                .filter(|cert| *cert != issuer)
+                .collect::<Vec<_>>();
+        }
 
         // chain
         Vec::new()
