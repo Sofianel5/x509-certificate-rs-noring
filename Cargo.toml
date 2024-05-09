@@ -27,5 +27,5 @@ signature = { version = "2.1.0", features = ["std"] }
 spki = { version = "0.7.2", features = ["alloc"] }
 thiserror = "1.0.50"
 x509-cert = "0.2.5"
-x509-verify = { version = "0.4.5", features = ["p256", "p384"] }
+x509-verify = { version = "0.4.5", features = ["p256", "p384", "x509", "pem"] }
 zeroize = { version = "1.6.0", features = ["derive"] }

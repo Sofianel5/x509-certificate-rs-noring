@@ -1212,38 +1212,21 @@ impl X509CertificateBuilder {
 #[cfg(test)]
 mod test {
     use der::{DecodePem, Encode};
-    use x509_cert::Certificate;
+    use x509_cert::{crl::CertificateList, Certificate};
     use x509_verify::{Signature, VerifyInfo, VerifyingKey};
     use {super::*, crate::X509CertificateError};
 
     #[test]
     fn test_newlib() -> () {
-        // let cert = include_bytes!("testdata/root.pem");
-        let root_cert = include_bytes!("testdata/root.pem");
-        let intermediate_cert = include_bytes!("testdata/intermediate.pem");
+        let root_cert = include_bytes!("testdata/issuer.pem");
+        let cert = include_bytes!("testdata/subject.pem");
 
         let root_cert = Certificate::from_pem(&root_cert).unwrap();
-        let intermediate_cert = Certificate::from_pem(&intermediate_cert).unwrap();
 
-        let verify_info = VerifyInfo::new(
-            intermediate_cert.tbs_certificate.to_der().unwrap().into(),
-            Signature::new(
-                &intermediate_cert.signature_algorithm,
-                intermediate_cert.signature.as_bytes().unwrap(),
-            ),
-        );
+        let cert = Certificate::from_pem(&cert).unwrap();
+        let key = VerifyingKey::try_from(&root_cert).unwrap();
 
-        let key: VerifyingKey = root_cert
-            .tbs_certificate
-            .subject_public_key_info
-            .try_into()
-            .unwrap();
-
-        // Keeps ownership
-        key.verify(&verify_info).unwrap();
-
-        // Throws away ownership
-        key.verify(verify_info).unwrap();
+        key.verify(&cert).unwrap();
     }
 
     #[test]
