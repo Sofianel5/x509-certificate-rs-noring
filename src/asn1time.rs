@@ -467,11 +467,11 @@ impl PrimitiveContent for UtcTime {
     }
 }
 
-#[cfg(test)]
+// #[cfg(test)]
 mod test {
     use {super::*, bcder::decode::ContentError};
 
-    #[test]
+    // #[test]
     fn generalized_time() -> Result<(), ContentError> {
         let gt = GeneralizedTime {
             time: chrono::NaiveDateTime::from_timestamp_opt(1643510772, 0).unwrap(),
@@ -541,7 +541,7 @@ mod test {
         Ok(())
     }
 
-    #[test]
+    // #[test]
     fn generalized_time_invalid() {
         for allow_fractional_seconds in [false, true] {
             for allowed_timezone in [

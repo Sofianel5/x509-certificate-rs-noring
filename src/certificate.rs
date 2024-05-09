@@ -4,6 +4,8 @@
 
 //! Defines high-level interface to X.509 certificates.
 
+use crate::algorithm::EcdsaCurve;
+
 use {
     crate::{
         // algorithm::DigestAlgorithm,asn1time::Time, rfc2986,
@@ -29,8 +31,6 @@ use {
     bytes::Bytes,
     chrono::{DateTime, Duration, Utc},
     der::{Decode, Document},
-    // ring::signature as ringsig,
-    // signature::Signer,
     spki::EncodePublicKey,
     std::{
         cmp::Ordering,
@@ -44,8 +44,19 @@ use {
 
 // use p256 lib
 use p256::{
-    ecdsa::{signature::Verifier, Signature, VerifyingKey},
-    PublicKey,
+    ecdsa::{
+        signature::Verifier as P256Verifier, Signature as P256Signature,
+        VerifyingKey as P256VerifyingKey,
+    },
+    PublicKey as P256PublicKey,
+};
+// use p384 lib
+use p384::{
+    ecdsa::{
+        signature::Verifier as P384Verifier, Signature as P384Signature,
+        VerifyingKey as P384VerifyingKey,
+    },
+    PublicKey as P384PublicKey,
 };
 
 // Key Usage extension.
@@ -574,6 +585,7 @@ impl CapturedX509Certificate {
             OriginalData::Der(data) => X509Certificate::from_der(data),
         }
         .expect("certificate re-parse should never fail");
+        println!("");
 
         let signed_data = this_cert
             .0
@@ -582,17 +594,45 @@ impl CapturedX509Certificate {
             .as_ref()
             .expect("original certificate data should have persisted as part of re-parse");
 
-        let signature_bytes = this_cert.0.signature.octet_bytes(); // TODO: CHECK IF THIS IS CORRECT
-        let signature = Signature::from_der(&signature_bytes).expect("deserializing error");
+        let signature_algorithm = this_cert
+            .key_algorithm()
+            .expect("signature algorithm should be known");
+        println!("key algorithm: {:?}", this_cert.key_algorithm());
+        // Check signature based on algorithm.
+        match signature_algorithm {
+            KeyAlgorithm::Ecdsa(EcdsaCurve::Secp256r1) => {
+                let signature_256 = P256Signature::from_der(&this_cert.0.signature.octet_bytes())
+                    .expect("signature should be valid");
 
-        let public_key_uncompressed = hex::decode(public_key_data).expect("decoding error");
-        let public_key =
-            PublicKey::from_sec1_bytes(&public_key_uncompressed).expect("import error");
-        let verifying_key = VerifyingKey::from(&public_key);
+                // Note: public key uncompressed has a leading 0x04 byte.
+                let public_key_uncompressed = public_key_data.as_ref().to_vec();
+                let public_key =
+                    P256PublicKey::from_sec1_bytes(&public_key_uncompressed).expect("import error");
+                let verifying_key = P256VerifyingKey::from(&public_key);
 
-        verifying_key
-            .verify(signed_data, &signature)
-            .map_err(|_| Error::CertificateSignatureVerificationFailed)
+                verifying_key
+                    .verify(signed_data, &signature_256)
+                    .map_err(|_| Error::CertificateSignatureVerificationFailed)
+            }
+            KeyAlgorithm::Ecdsa(EcdsaCurve::Secp384r1) => {
+                println!("verifying with secp384r1");
+                let signature_384 = P384Signature::from_der(&this_cert.0.signature.octet_bytes())
+                    .expect("signature should be valid");
+
+                println!("signature 384: {:?}", this_cert.0.signature.octet_bytes());
+
+                let public_key_uncompressed = public_key_data.as_ref().to_vec();
+                let public_key =
+                    P384PublicKey::from_sec1_bytes(&public_key_uncompressed).expect("import error");
+                let verifying_key = P384VerifyingKey::from(&public_key);
+                println!("key: {:?}", verifying_key);
+
+                verifying_key
+                    .verify(signed_data, &signature_384)
+                    .map_err(|_| Error::CertificateSignatureVerificationFailed)
+            }
+            _ => panic!("unsupported signature algorithm"),
+        }
     }
 
     // Verify that another certificate, `other`, signed this certificate.
@@ -1169,113 +1209,46 @@ impl X509CertificateBuilder {
 
 #[cfg(test)]
 mod test {
-    use {
-        super::*,
-        crate::{EcdsaCurve, X509CertificateError},
-    };
+    use {super::*, crate::X509CertificateError};
 
-    // #[test]
-    // fn builder_ed25519_default() {
-    //     let builder = X509CertificateBuilder::default();
-    //     builder
-    //         .create_with_random_keypair(KeyAlgorithm::Ed25519)
-    //         .unwrap();
-    // }
+    #[test]
+    fn ecdsa_prime256v1_cert_validation() -> Result<(), X509CertificateError> {
+        let root = include_bytes!("testdata/ecdsa-prime256v1-root.der");
+        let signed = include_bytes!("testdata/ecdsa-prime256v1-signed.der");
 
-    // #[test]
-    // fn build_ecdsa_default() {
-    //     for curve in EcdsaCurve::all() {
-    //         let key_algorithm = KeyAlgorithm::Ecdsa(*curve);
+        let root = CapturedX509Certificate::from_der(root.as_ref())?;
+        let signed = CapturedX509Certificate::from_der(signed.as_ref())?;
 
-    //         let builder = X509CertificateBuilder::default();
-    //         builder.create_with_random_keypair(key_algorithm).unwrap();
-    //     }
-    // }
+        // root.verify_signed_by_certificate(&root)
+        signed.verify_signed_by_certificate(&root)
+    }
 
-    // #[test]
-    // fn build_subject_populate() {
-    //     let mut builder = X509CertificateBuilder::default();
-    //     builder
-    //         .subject()
-    //         .append_common_name_utf8_string("My Name")
-    //         .unwrap();
-    //     builder
-    //         .subject()
-    //         .append_country_utf8_string("Wakanda")
-    //         .unwrap();
+    #[test]
+    fn test_256signature_verification() -> Result<(), X509CertificateError> {
+        let self_256 = include_bytes!("testdata/ecdsa-p256-sha256-self-signed.cer");
+        let self_256_cert = CapturedX509Certificate::from_der(self_256.as_ref())?;
+        self_256_cert.verify_signed_by_certificate(&self_256_cert)
+    }
 
-    //     builder
-    //         .create_with_random_keypair(KeyAlgorithm::Ed25519)
-    //         .unwrap();
-    // }
+    #[test]
+    fn test_384signature_verification() -> Result<(), X509CertificateError> {
+        let self_384 = include_bytes!("testdata/ecdsa-p384-sha256-self-signed.cer");
+        let self_384_cert = CapturedX509Certificate::from_der(self_384.as_ref())?;
+        self_384_cert.verify_signed_by_certificate(&self_384_cert)
+    }
 
-    // #[test]
-    // fn builder_csr_ecdsa() -> Result<(), Error> {
-    //     for curve in EcdsaCurve::all() {
-    //         let key_algorithm = KeyAlgorithm::Ecdsa(*curve);
+    #[test]
+    fn test_cert_chain() -> Result<(), X509CertificateError> {
+        // verify verify_signed_by_certificate
+        let issuer_pem = include_bytes!("testdata/issuer.pem");
+        let subject_pem = include_bytes!("testdata/subject.pem");
+        let root = include_bytes!("testdata/root.pem");
 
-    //         let key = InMemorySigningKeyPair::generate_random(key_algorithm)?;
+        let issuer_cert = CapturedX509Certificate::from_pem(issuer_pem.as_ref()).unwrap();
+        let subject_cert = CapturedX509Certificate::from_pem(subject_pem.as_ref()).unwrap();
+        let root_cert = CapturedX509Certificate::from_pem(root.as_ref()).unwrap();
 
-    //         let builder = X509CertificateBuilder::default();
-
-    //         let csr = builder.create_certificate_signing_request(&key)?;
-
-    //         assert_eq!(
-    //             csr.certificate_request_info
-    //                 .subject_public_key_info
-    //                 .algorithm,
-    //             key_algorithm.into()
-    //         );
-    //     }
-
-    //     Ok(())
-    // }
-
-    // #[test]
-    // fn ecdsa_p256_sha256_self_signed() {
-    //     let der = include_bytes!("testdata/ecdsa-p256-sha256-self-signed.cer");
-
-    //     let cert = CapturedX509Certificate::from_der(der.to_vec()).unwrap();
-    //     cert.verify_signed_by_certificate(&cert).unwrap();
-
-    //     cert.to_public_key_der().unwrap();
-    // }
-
-    // #[test]
-    // fn ecdsa_p384_sha256_self_signed() {
-    //     let der = include_bytes!("testdata/ecdsa-p384-sha256-self-signed.cer");
-
-    //     let cert = CapturedX509Certificate::from_der(der.to_vec()).unwrap();
-    //     cert.verify_signed_by_certificate(&cert).unwrap();
-    //     cert.to_public_key_der().unwrap();
-    // }
-
-    // #[test]
-    // fn ecdsa_p512_sha256_self_signed() {
-    //     let der = include_bytes!("testdata/ecdsa-p512-sha256-self-signed.cer");
-
-    //     // We can parse this. But we don't support secp512 elliptic curves because ring
-    //     // doesn't support it.
-    //     let cert = CapturedX509Certificate::from_der(der.to_vec()).unwrap();
-    //     cert.to_public_key_der().unwrap();
-
-    //     assert!(matches!(
-    //         cert.verify_signed_by_certificate(&cert),
-    //         Err(Error::UnknownEllipticCurve(_))
-    //     ));
-    // }
-
-    // #[test]
-    // fn ecdsa_prime256v1_cert_validation() -> Result<(), X509CertificateError> {
-    //     let root = include_bytes!("testdata/ecdsa-prime256v1-root.der");
-    //     let signed = include_bytes!("testdata/ecdsa-prime256v1-signed.der");
-
-    //     let root = CapturedX509Certificate::from_der(root.as_ref())?;
-    //     let signed = CapturedX509Certificate::from_der(signed.as_ref())?;
-
-    //     root.verify_signed_by_certificate(&root)?;
-    //     signed.verify_signed_by_certificate(&root)?;
-
-    //     Ok(())
-    // }
+        // issuer_cert.verify_signed_by_certificate(&issuer_cert)
+        issuer_cert.verify_signed_by_certificate(&root_cert)
+    }
 }

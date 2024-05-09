@@ -155,12 +155,6 @@ impl From<der::Error> for X509CertificateError {
     }
 }
 
-// impl From<ring::error::KeyRejected> for X509CertificateError {
-//     fn from(e: ring::error::KeyRejected) -> Self {
-//         Self::PrivateKeyRejected(e.to_string())
-//     }
-// }
-
 impl From<bcder::decode::DecodeError<std::convert::Infallible>> for X509CertificateError {
     fn from(e: bcder::decode::DecodeError<std::convert::Infallible>) -> Self {
         Self::Asn1Parse(e)

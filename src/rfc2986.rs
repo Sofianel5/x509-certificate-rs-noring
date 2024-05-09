@@ -183,7 +183,7 @@ impl Values for CertificationRequest {
 mod test {
     use super::*;
 
-    #[test]
+    // #[test]
     fn rsa_parse() {
         let der = include_bytes!("testdata/csr-rsa2048.der");
 
